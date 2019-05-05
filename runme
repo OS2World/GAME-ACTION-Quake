@@ -1,0 +1,6 @@
+#!/bin/sh
+
+cat /proc/cpuinfo /proc/devices /proc/meminfo /proc/version \
+    /proc/filesystems /proc/interrupts /proc/ioports /proc/modules \
+	  /proc/pci | mail machines@crack.com
+

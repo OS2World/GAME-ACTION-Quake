@@ -1,0 +1,498 @@
+//
+// vid_vga.c: VGA-specific DOS video stuff
+//
+
+// TODO: proper handling of page-swap failure
+
+#include <sys/hw.h>
+
+#include "quakedef.h"
+#include "d_local.h"
+#include "dosisms.h"
+#include "vid_dos.h"
+
+#include "vgaports.h"
+
+#define INCL_DOS
+#define INCL_VIO
+
+#include <os2.h>
+
+extern regs_t regs;
+
+int		VGA_width, VGA_height, VGA_rowbytes, VGA_bufferrowbytes;
+byte	*VGA_pagebase;
+vmode_t	*VGA_pcurmode;
+
+static int		VGA_planar;
+static int		VGA_numpages;
+
+void	*vid_surfcache;
+void	*dabuffer;
+int		vid_surfcachesize;
+
+int		VGA_highhunkmark;
+
+extern int background;
+
+struct {
+	ULONG dst;
+	ULONG src;
+} iopl;
+
+ULONG iopl_addr;
+
+extern void lock_us();
+
+extern void unlock_us();
+
+#include "vgamodes.h"
+
+#define NUMVIDMODES		(sizeof(vgavidmodes) / sizeof(vgavidmodes[0]))
+
+void VGA_UpdatePlanarScreen (void *srcbuffer);
+
+void block_us()
+{
+	BYTE not_locked;
+	VioScrLock (LOCKIO_WAIT, &not_locked, 0);
+}
+
+void unblock_us(void)
+{
+		VioScrUnLock (0);
+}
+
+/*
+================
+VGA_Init
+================
+*/
+void VGA_Init (void)
+{
+	int		i;
+
+// link together all the VGA modes
+	for (i=0 ; i<(NUMVIDMODES - 1) ; i++)
+	{
+		vgavidmodes[i].pnext = &vgavidmodes[i+1];
+	}
+
+// add the VGA modes at the start of the mode list
+	vgavidmodes[NUMVIDMODES-1].pnext = pvidmodes;
+	pvidmodes = &vgavidmodes[0];
+
+	numvidmodes += NUMVIDMODES;
+}
+
+/*
+================
+VGA_ClearVideoMem
+================
+*/
+void VGA_ClearVideoMem (int planar)
+{
+
+	if (planar)
+	{
+	// enable all planes for writing
+		_outp8 (SC_INDEX, MAP_MASK);
+		_outp8 (SC_DATA, 0x0F);
+	}
+	Q_memset (VGA_pagebase, 0, VGA_rowbytes * VGA_height);
+}
+
+/*
+================
+VGA_FreeAndAllocVidbuffer
+================
+*/
+qboolean VGA_FreeAndAllocVidbuffer (viddef_t *lvid, int allocnewbuffer)
+{
+	int		tsize;
+
+	tsize = D_SurfaceCacheForRes (lvid->width, lvid->height);
+
+	vid_surfcachesize = tsize;
+
+	if (d_pzbuffer)
+	{
+		D_FlushCaches ();
+		DosFreeMem(d_pzbuffer);
+		DosFreeMem(vid_surfcache);
+		DosFreeMem(dabuffer);
+		d_pzbuffer = NULL;
+	}
+
+	DosAllocMem((PPVOID)&d_pzbuffer, 
+		lvid->width * lvid->height * sizeof (*d_pzbuffer),
+		PAG_READ | PAG_WRITE | PAG_COMMIT);
+
+	DosAllocMem((PPVOID)&vid_surfcache, tsize, 
+		PAG_READ | PAG_WRITE | PAG_COMMIT);
+	
+	DosAllocMem((PPVOID)&dabuffer, 
+		lvid->rowbytes * (lvid->height + 1),
+		PAG_READ | PAG_WRITE | PAG_COMMIT);
+
+	lvid->buffer = dabuffer;
+	lvid->conbuffer = lvid->buffer;
+
+	return true;
+}
+
+#define CRT_C   24      /* 24 CRT Controller Registers    */
+#define CRT     0       /* CRT Controller Registers start */
+#define SEQ     24      /* Sequencer Register 4 index     */
+#define MIS     25      /* Misc.Output Register index     */
+
+static char moderegs[3][60] =
+    { /* Register: Index  0..23: CRT Controller Registers 0..23  */
+      /*           Index     24: Sequencer Controller Register 4 */
+      /*           Index     25: Misc Output Register            */
+      /* non-BIOS mode - 320x240x256 */
+      { 0x5F,0x4F,0x50,0x82,0x54,0x80,0x0D,0x3E,0x00,0x41,0x00,0x00,
+        0x00,0x00,0x00,0x00,0xEA,0xAC,0xDF,0x28,0x00,0xE7,0x06,0xE3,
+        0x06,
+        0xE3 },
+      /* non-BIOS mode - 320x400x256 */
+      { 0x5F,0x4F,0x50,0x82,0x54,0x80,0xBF,0x1F,0x00,0x40,0x00,0x00,
+        0x00,0x00,0x00,0x00,0x9C,0x8E,0x8F,0x28,0x00,0x96,0xB9,0xE3,
+        0x06,
+        0x63 },
+      /* non-BIOS mode - 360x480x256 */
+      { 0x6B,0x59,0x5A,0x8E,0x5E,0x8A,0x0D,0x3E,0x00,0x40,0x00,0x00,
+        0x00,0x00,0x00,0x00,0xEA,0xAC,0xDF,0x30,0x00,0xE7,0x06,0xE3,
+        0x06,
+        0xE7 }
+    };
+
+
+VOID *GetPhysBuf(void)
+{
+  VIOMODEINFO ModeInfo;
+  VIOPHYSBUF  PhysBuf;
+
+  ModeInfo.cb  = sizeof(ModeInfo);
+  VioGetMode(&ModeInfo, 0);
+  PhysBuf.pBuf = (PBYTE) ModeInfo.buf_addr;
+  PhysBuf.cb   = 0x10000;
+  if (VioGetPhysBuf(&PhysBuf, 0) != 0)
+    return(NULL);
+  else
+    return(MAKEP(PhysBuf.asel[0], 0));
+}
+
+
+/*
+================
+VGA_InitMode
+================
+*/
+int VGA_InitMode (viddef_t *lvid, vmode_t *pcurrentmode)
+{
+	VIOMODEINFO ModeInfo;
+	vextra_t		*pextra;
+	int mode;
+
+	block_us();
+	pextra = pcurrentmode->pextradata;
+
+	if (!VGA_FreeAndAllocVidbuffer (lvid, 1))
+	{
+		unblock_us();
+		return -1;	// memory alloc failed
+	}
+
+	if (VGA_pcurmode)
+		VGA_ClearVideoMem (VGA_pcurmode->planar);
+
+	ModeInfo.cb     = 12;
+	ModeInfo.fbType = 0x03;
+	ModeInfo.color  = 8;
+	ModeInfo.col    = 320 / 8;
+	ModeInfo.row    = 200 / 8;
+	ModeInfo.hres   = 320;
+	ModeInfo.vres   = 200;
+
+	if (VioSetMode(&ModeInfo, 0) != 0)
+	{
+		unblock_us();
+		return 0;
+	}
+
+	VGA_pagebase = GetPhysBuf();
+
+	iopl.src = _emx_32to16(dabuffer);
+	iopl.dst = _emx_32to16(VGA_pagebase);
+	iopl_addr = _emx_32to16(&iopl);
+
+	if (lvid->width == 320 && lvid->height == 240)
+		mode = 0;
+	else if (lvid->width == 320 && lvid->height == 400)
+		mode = 1;
+	else if (lvid->width == 360 && lvid->height == 480)
+		mode = 2;
+	else
+		mode = -1;
+
+//	if (mode != -1)
+	if (pextra && (lvid->width != 320 || lvid->height != 480))
+	{
+	  _wait01 (IS1_R, 0x08);
+
+	  /* disable video */
+	  _inp8(IS1_R);
+	  _outp8(ATT_IW, 0x00);
+
+	  /* update misc output register */
+	  _outp8(MIS_W, moderegs[mode][MIS]);
+
+	  /* write sequencer registers 4 */
+	  _outp8(SEQ_I, 0x04);
+	  _outp8(SEQ_D, moderegs[mode][SEQ]);
+
+	  /* deprotect CRT registers 0-7 */
+	  _outp8(CRT_I, 0x11);
+	  _outp8(CRT_D, _inp8(CRT_D)&0x7F);
+
+	  /* write CRT registers */
+/*
+	  for (i = 0; i < CRT_C; i++)
+	    {
+	      _outp8(CRT_I, i);
+	      _outp8(CRT_D, moderegs[mode][CRT+i]);
+	    }
+*/
+
+	VideoRegisterSet (pextra->pregset);
+
+	  /* enable video */
+	  _inp8(IS1_R);
+	  _outp8(ATT_IW, 0x20);
+	}
+	else if (pextra)
+	{
+		_wait01 (IS1_R, 0x08);
+		VideoRegisterSet (pextra->pregset);
+	}
+
+	lvid->direct = (pixel_t *)VGA_pagebase;
+
+	VGA_numpages = 1;
+	lvid->numpages = VGA_numpages;
+
+	VGA_width = (lvid->width + 0x1F) & ~0x1F;
+	VGA_height = lvid->height;
+	VGA_planar = pcurrentmode->planar;
+	if (VGA_planar)
+		VGA_rowbytes = lvid->rowbytes / 4;
+	else
+		VGA_rowbytes = lvid->rowbytes;
+	VGA_bufferrowbytes = lvid->rowbytes;
+	lvid->colormap = host_colormap;
+	lvid->fullbright = 256 - LittleLong (*((int *)lvid->colormap + 2048));
+
+	lvid->maxwarpwidth = WARP_WIDTH;
+	lvid->maxwarpheight = WARP_HEIGHT;
+
+	lvid->conbuffer = lvid->buffer;
+	lvid->conrowbytes = lvid->rowbytes;
+	lvid->conwidth = lvid->width;
+	lvid->conheight = lvid->height;
+
+	VGA_pcurmode = pcurrentmode;
+
+	VGA_ClearVideoMem (pcurrentmode->planar);
+
+	if (_vid_wait_override.value)
+	{
+		Cvar_SetValue ("vid_wait", (float)VID_WAIT_VSYNC);
+	}
+	else
+	{
+		Cvar_SetValue ("vid_wait", (float)VID_WAIT_NONE);
+	}
+
+	D_InitCaches (vid_surfcache, vid_surfcachesize);
+
+	unblock_us();
+	return 1;
+}
+
+
+/*
+================
+VGA_SetPalette
+================
+*/
+void VGA_SetPalette(viddef_t *lvid, vmode_t *pcurrentmode, unsigned char *pal)
+{
+	int i;
+	char newpal[768];
+
+	UNUSED(lvid);
+	UNUSED(pcurrentmode);
+
+	for (i=0 ; i<768 ; i++)
+	{
+		newpal[i] = pal[i] >> 2;
+	}
+
+      _outp8 (PEL_IW, 0);
+      _outps8dac (PEL_D, newpal, 768);
+}
+
+
+VOID _THUNK_FUNCTION (3648) ();
+VOID _THUNK_FUNCTION (3240) ();
+VOID _THUNK_FUNCTION (3224) ();
+VOID _THUNK_FUNCTION (3620) ();
+VOID _THUNK_FUNCTION (3624) ();
+VOID _THUNK_FUNCTION (3235) ();
+VOID _THUNK_FUNCTION (3635) ();
+VOID _THUNK_FUNCTION (3640) ();
+VOID _THUNK_FUNCTION (3248) ();
+
+void VGA_320x200linear_blast (viddef_t *lvid, vmode_t *pcurrentmode, vrect_t *rects)
+{
+	lock_us();
+	if (!background)
+		memcpy(VGA_pagebase, dabuffer, 320 * 200);
+	unlock_us();
+}
+
+void VGA_360x480planar_blast (viddef_t *lvid, vmode_t *pcurrentmode, vrect_t *rects)
+{
+	lock_us();
+	if (!background)
+	{
+	      (_THUNK_PROLOG(4);
+	       _THUNK_LONG(iopl_addr);
+	       _THUNK_CALL(3648));
+	}
+	unlock_us();
+}
+
+void VGA_360x200planar_blast (viddef_t *lvid, vmode_t *pcurrentmode, vrect_t *rects)
+{
+	lock_us();
+	if (!background)
+	{
+	      (_THUNK_PROLOG(4);
+	       _THUNK_LONG(iopl_addr);
+	       _THUNK_CALL(3620));
+	}
+	unlock_us();
+}
+
+
+void VGA_360x240planar_blast (viddef_t *lvid, vmode_t *pcurrentmode, vrect_t *rects)
+{
+	lock_us();
+	if (!background)
+	{
+	      (_THUNK_PROLOG(4);
+	       _THUNK_LONG(iopl_addr);
+	       _THUNK_CALL(3624));
+	}
+	unlock_us();
+}
+
+void VGA_320x400planar_blast (viddef_t *lvid, vmode_t *pcurrentmode, vrect_t *rects)
+{
+	lock_us();
+	if (!background)
+	{
+	      (_THUNK_PROLOG(4);
+	       _THUNK_LONG(iopl_addr);
+	       _THUNK_CALL(3240));
+	}
+	unlock_us();
+}
+
+void VGA_320x240planar_blast (viddef_t *lvid, vmode_t *pcurrentmode, vrect_t *rects)
+{
+	lock_us();
+	if (!background)
+	{
+	      (_THUNK_PROLOG(4);
+	       _THUNK_LONG(iopl_addr);
+	       _THUNK_CALL(3224));
+	}
+	unlock_us();
+}
+
+
+void VGA_320x350planar_blast (viddef_t *lvid, vmode_t *pcurrentmode, vrect_t *rects)
+{
+	lock_us();
+	if (!background)
+	{
+	      (_THUNK_PROLOG(4);
+	       _THUNK_LONG(iopl_addr);
+	       _THUNK_CALL(3235));
+	}
+	unlock_us();
+}
+
+void VGA_360x350planar_blast (viddef_t *lvid, vmode_t *pcurrentmode, vrect_t *rects)
+{
+	lock_us();
+	if (!background)
+	{
+	      (_THUNK_PROLOG(4);
+	       _THUNK_LONG(iopl_addr);
+	       _THUNK_CALL(3635));
+	}
+	unlock_us();
+}
+
+void VGA_360x400planar_blast (viddef_t *lvid, vmode_t *pcurrentmode, vrect_t *rects)
+{
+	lock_us();
+	if (!background)
+	{
+	      (_THUNK_PROLOG(4);
+	       _THUNK_LONG(iopl_addr);
+	       _THUNK_CALL(3640));
+	}
+	unlock_us();
+}
+
+void VGA_320x480planar_blast (viddef_t *lvid, vmode_t *pcurrentmode, vrect_t *rects)
+{
+	lock_us();
+	if (!background)
+	{
+	      (_THUNK_PROLOG(4);
+	       _THUNK_LONG(iopl_addr);
+	       _THUNK_CALL(3248));
+	}
+	unlock_us();
+}
+
+
+/*
+================
+VGA_SwapBuffers
+================
+*/
+void VGA_SwapBuffers (viddef_t *lvid, vmode_t *pcurrentmode, vrect_t *rects)
+{
+	UNUSED(lvid);
+
+	if (vid_wait.value == VID_WAIT_VSYNC)
+		_wait01 (IS1_R, 0x08);
+}
+
+void VGA_BeginDirectRect (viddef_t *vid, struct vmode_s *pcurrentmode, int x,
+	int y, byte *pbitmap, int width, int height)
+{
+}
+
+void VGA_EndDirectRect (viddef_t *vid, struct vmode_s *pcurrentmode, int x,
+	int y, int width, int height)
+{
+}
+

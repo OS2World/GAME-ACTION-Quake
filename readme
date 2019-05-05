@@ -1,0 +1,12 @@
+Must have EMX.
+
+To make full screen version:
+
+	make quakefs.exe
+
+Do not delete iopl.obj unless you have masm.exe to compile it.
+
+OS/2 specific stuff is in: *_os2.c vid_vga.c vid_vio.c vid_dive.c snd_dma.c
+snd_mix.c snd_dart.c and maybe other files... Diff with official quake source
+released by ID for more info...
+

@@ -1,0 +1,97 @@
+
+  === Quake ported to Linux by Dave Taylor at Crack dot Com, Inc. ===
+
+                    QUICK AND DIRTY (FOR THE BRAVE)
+
+  Put xquake and xf86quake in the directory where quake.exe is or get the
+  "id1" subdirectory and its data files and put it above that.  First,
+  run "runme" to submit your machine configuration.  Then run "xquake"
+  or "xf86quake" to play the game.  Enjoy.
+
+                             THE DETAILS
+
+  This archive should include the files: README.intel_linux, runme,
+  xf86quake, and xquake.  You must get the data files from
+  ftp.cdrom.com:/quake/idstuff/quake/quake101.zip.  You take
+  the QSW101.? files therein, cat them into one large file named
+  "quakedata.exe", then extract that file with lha.  The quake101.zip
+  also has files with much more complete documentation on the game.
+
+  The runme program is a shell script which will send a letter to Crack
+  dot Com with statistics about your computer so that we may learn more
+  about the Linux market.  Please run it only once.  Do not run it again
+  even if you get a new version of the game.  We need this data to make
+  our next game run well on your machine.  It sends information from
+  your /proc directory telling us about your devices, your CPU, your
+  memory, etc.  It is a shell script, and you may inspect and edit it
+  if you feel it violates security.
+
+  To run xquake, any X server should do.  To run xf86quake, you need
+  XFree86 3.1.2E or later.  To run either xquake or xf86quake, you need
+  about 16Mb of RAM, a Pentium or Alpha, an X server running in 8bit
+  mode, a keyboard, and a video card on a local or PCI bus.  You need
+  Linux version 1.3.88 or later.  You need ELF binary support.  The Linux
+  version does not support CDROM music.  Mouse is supported in xf86quake.
+  A net card will let you play net games over UDP.  There is no serial
+  support in the Linux version.
+
+  To get sound, you'll need the sound driver with mmapable DMA buffers.
+  This was definitely available in 1.3.88 and should be available in
+  everything after that.  Quake is one of the first apps to use the
+  mmapable DMA buffers, so if it crashes, run quake with the "-nosound"
+  option.  Alpha Quake needs a sound driver patch for EV5 boards.  It
+  should be merged into the kernel sometime after 2.0.10.
+
+  To run xf86quake, you must have a video card that can linearly map its
+  address space, and that card must be supported in XFree86 3.1.2E or
+  later.  You must also run as root.  xf86quake may run faster than xquake
+  and runs full-screen.  xf86quake also allows the use of the mouse.
+  You must also setup your XF86Config file to add lower resolution modes,
+  typically 640x480 to 320x200.  Bug your Linux distribution company if
+  you don't have them.
+
+                          ENVIRONMENT VARIABLES
+
+  The following environment variables have been added: QUAKE_SOUND_SPEED,
+  QUAKE_SOUND_SAMPLEBITS, and QUAKE_SOUND_CHANNELS.  Their defaults are
+  11kHz, 16 bits, and 2 channels.  Other configurations have not been
+  thorougly tested, but you may want to tweak these if you are having
+	sound trouble.
+
+                                   BUGS
+
+  Alpha/Linux Quake does not have sprites due to an uncaught bug, but they're not
+  too sorely missed.  In Alpha/Linux Quake, if you want to restart a game,
+  do NOT go to the menu and say "New Game".  Instead, open the console
+  with the ` (back-tick) character and type "disconnect ; map start".
+  Intel/Linux xf86quake flickers badly on our development machine.  Appears to
+  be a synchronization problem with the X server.
+
+                                  THANKS
+
+  Thanks to #linux for lotsa help w/ Linux admin & guidance!  Many thanks
+  to Linus Torvalds, Alan Cox, Hannu Savolainen, and Jon Tombs for
+  their cool extensions to Linux to make games fast!
+
+                                 WEB SITES
+
+  id Software, Inc.: http://www.idsoftware.com
+  Crack dot Com, Inc.: http://crack.com
+  Linux : http://sunsite.unc.edu
+
+                         A NOTE FROM DAVE TAYLOR
+
+  Crack is out of time.  We are doing full-time development of our next
+  game and have plenty on our plates.  We can merge in one or two
+  more versions of Quake (if necessary) and release them, but we
+  will not be fixing bugs unless they're trivial.
+
+  On the bright side, our next game will be a lot of fun and will
+  come out sooner if we're not distracted.  This was written
+  on 8/7/96.  Crack should have a new web site up in a couple
+  weeks to show what we're up to.
+
+  id Software is focusing on the next technology.  Don't bug 'em
+  about the Linux ports!  For the latest information on what they're
+  up to, finger johnc@idsoftware.com or check out their web site.
+

@@ -1,0 +1,88 @@
+.386
+R2SEG SEGMENT BYTE PUBLIC USE16 'CODE'
+      ASSUME  CS:R2SEG, DS:NOTHING
+
+PUBLIC _16_TEST
+_16_TEST  PROC  FAR
+
+	push bp
+	mov  bp, sp
+	push ds
+	push es
+	push esi
+	push edi
+	push ebx
+
+	lds  si, [bp + 6]
+	les  di, [si]
+	lds  si, [si + 4]
+	
+	mov	dx, 03C4h
+	mov	al, 2
+	out	dx, al	
+;	mov	al, al	
+	inc	dx
+	
+	mov cl, 30
+loop30:
+	mov al, 1
+plane_loop:
+	out dx, al
+;	mov	al, al	
+	push si
+	push di
+	mov ch, 0
+
+	mov bp, 16 * 24
+loop16:
+	mov bh, byte ptr [si + 12]
+	mov bl, byte ptr [si + 8]
+	shl ebx, 16
+	mov bh, byte ptr [si + 4]
+	mov bl, byte ptr [si]
+
+	mov dword ptr es:[di], ebx
+	add di, 4
+	add si, 16
+	jnc no_new_seg1
+        mov bx, ds
+	add bx, 8
+	mov ds, bx
+	mov ch, 1
+no_new_seg1:
+        dec bp
+        jnz loop16
+	pop di
+	pop si
+	cmp ch, 0
+	je was_no_seg
+	mov bx, ds
+	sub bx, 8
+	mov ds, bx
+was_no_seg:
+	inc si
+	shl al, 1
+	cmp al, 16
+	jnz plane_loop
+        add di, 96 * 16 
+        add si, 384 * 16 - 4
+	jnc no_new_seg2
+	mov bx, ds
+	add bx, 8
+	mov ds, bx
+no_new_seg2:
+	dec cl
+	jnz loop30
+exit:
+	pop ebx
+	pop edi
+	pop esi
+	pop es
+	pop ds
+	pop bp
+	ret 4
+
+_16_TEST  ENDP
+
+R2SEG   ENDS
+   END

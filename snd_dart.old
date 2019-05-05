@@ -1,0 +1,171 @@
+#define INCL_DOS
+#include <os2.h>
+
+#define INCL_MCIOS2
+#define INCL_MACHDR
+
+#include <os2me.h>
+
+#include <sys/types.h>
+#include <stdio.h>
+#include <string.h>
+#include <strings.h>
+#include <stdlib.h>
+#include <fcntl.h>
+
+#include "quakedef.h"
+
+dma_t theshm;
+int snd_inited = 0;
+
+
+#define MAX_BUFFERS 1
+MCI_MIX_BUFFER       MixBuffers[MAX_BUFFERS];   /* Device buffers          */
+USHORT               usDeviceID;                /* Amp Mixer device id     */
+MCI_MIXSETUP_PARMS   MixSetupParms;             /* Mixer parameters        */
+MCI_BUFFER_PARMS     BufferParms;               /* Device buffer parms     */
+MCI_STATUS_PARMS get;
+ULONG oops = 0;
+
+extern int da_buffers;
+
+LONG APIENTRY MyEvent (ULONG ulStatus,
+                        PMCI_MIX_BUFFER  pBuffer,
+                        ULONG  ulFlags  )
+
+{
+	get.ulItem = MCI_STATUS_POSITION;
+	mciSendCommand( usDeviceID, MCI_STATUS,
+		MCI_WAIT | MCI_STATUS_ITEM, &get, 0);
+	oops = get.ulReturn;
+         MixSetupParms.pmixWrite( MixSetupParms.ulMixHandle,
+                               &MixBuffers[0],
+                               1 );
+	da_buffers++;
+   return( TRUE );
+} /* end MyEvent */
+
+
+qboolean SNDDMA_Init(void)
+{
+	MCI_AMP_OPEN_PARMS   AmpOpenParms;
+	ULONG rc;
+	int i;
+
+	shm = &theshm;
+
+	shm->channels = 2;
+	shm->samplebits = 8;
+	shm->speed = 11025;
+
+	memset ( &AmpOpenParms, '\0', sizeof ( MCI_AMP_OPEN_PARMS ) );
+	AmpOpenParms.usDeviceID = ( USHORT ) 0;
+	AmpOpenParms.pszDeviceType = ( PSZ ) MCI_DEVTYPE_AUDIO_AMPMIX;
+
+	rc = mciSendCommand( 0,
+                       MCI_OPEN,
+                       MCI_WAIT | MCI_OPEN_TYPE_ID | MCI_OPEN_SHAREABLE,
+                       ( PVOID ) &AmpOpenParms,
+                       0 );
+	if (rc)
+		return 0;
+
+	usDeviceID = AmpOpenParms.usDeviceID;
+
+	memset( &MixSetupParms, '\0', sizeof( MCI_MIXSETUP_PARMS ) );
+	MixSetupParms.ulFormatTag = MCI_WAVE_FORMAT_PCM;
+	MixSetupParms.ulFormatMode = MCI_PLAY;
+	MixSetupParms.ulDeviceType = MCI_DEVTYPE_WAVEFORM_AUDIO;
+	MixSetupParms.pmixEvent    = MyEvent;
+
+	MixSetupParms.ulBitsPerSample = shm->samplebits;   
+	MixSetupParms.ulSamplesPerSec = shm->speed;
+	MixSetupParms.ulChannels = shm->channels;
+
+	rc = mciSendCommand( usDeviceID,
+                        MCI_MIXSETUP,
+                        MCI_WAIT | MCI_MIXSETUP_INIT,
+                        ( PVOID ) &MixSetupParms,
+                        0 );
+
+	if (!rc)
+	{
+		fprintf(stderr, "MCI_MIXSETUP successful, buffer_size = %d\n", MixSetupParms.ulBufferSize);
+		fflush(stderr);
+	}
+	else
+	{
+		fprintf(stderr, "MCI_MIXSETUP _not_ successful\n");
+		fflush(stderr);
+		return 0;
+	}
+
+	BufferParms.ulNumBuffers = 1;
+	BufferParms.ulBufferSize = MixSetupParms.ulBufferSize;
+	BufferParms.pBufList = MixBuffers;
+
+	rc = mciSendCommand( usDeviceID,
+                        MCI_BUFFER,
+                        MCI_WAIT | MCI_ALLOCATE_MEMORY,
+                        ( PVOID ) &BufferParms,
+                        0 );
+
+	if (!rc)
+	{
+		fprintf(stderr, "MCI_BUFFER successful\n");
+		fflush(stderr);
+	}
+	else
+	{
+		fprintf(stderr, "MCI_BUFFER _not_ successful\n");
+		fflush(stderr);
+		return 0;
+	}
+
+//	MixBuffers[0].ulFlags = 0;
+
+	shm->soundalive = true;
+	shm->splitbuffer = false;
+	shm->samples = MixSetupParms.ulBufferSize / (shm->samplebits/8);
+	shm->samplepos = 0;
+	shm->submission_chunk = 1;
+	shm->buffer = MixBuffers[0].pBuffer;
+	snd_inited = 1;
+	get.ulItem = MCI_STATUS_POSITION;
+	mciSendCommand( usDeviceID, MCI_STATUS,
+		MCI_WAIT | MCI_STATUS_ITEM, &get, 0);
+	oops = get.ulReturn;
+        MixSetupParms.pmixWrite( MixSetupParms.ulMixHandle,
+                               &MixBuffers[0],
+                               1 );
+        MixSetupParms.pmixWrite( MixSetupParms.ulMixHandle,
+                               &MixBuffers[0],
+                               1 );
+        MixSetupParms.pmixWrite( MixSetupParms.ulMixHandle,
+                               &MixBuffers[0],
+                               1 );
+	return 1;
+}
+
+int SNDDMA_GetDMAPos(void)
+{
+	int new;
+	static int cnt = 0;
+	if (!snd_inited)
+		return 0;
+
+	get.ulItem = MCI_STATUS_POSITION;
+	mciSendCommand( usDeviceID, MCI_STATUS,
+		MCI_WAIT | MCI_STATUS_ITEM, &get, 0);
+	new = get.ulReturn - oops;
+	new = new * 32;
+	if (new >= shm->samples-1)
+		new = shm->samples - 1;
+	return new;
+}
+
+void SNDDMA_Shutdown(void)
+{
+}
+
+
